@@ -27,6 +27,7 @@ source-repository head
 library
   exposed-modules:
       Codec.Compression.BWT
+      Codec.Compression.BWT.Error
       Codec.Compression.Decode
       Codec.Compression.Encode
   other-modules:

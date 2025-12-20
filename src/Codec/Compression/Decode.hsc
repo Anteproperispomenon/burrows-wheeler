@@ -1,3 +1,5 @@
+{-# OPTIONS_HADDOCK hide #-}
+
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ViewPatterns #-}
@@ -14,6 +16,8 @@ import Control.Monad
 import Data.ByteString qualified as BS
 
 import Data.ByteString.Unsafe qualified as BSU
+
+import Codec.Compression.BWT.Error
 
 import Foreign
 import Foreign.C.Types
@@ -39,7 +43,7 @@ foreign import ccall "decode.h undo_bwt"
   c_undo_bwt :: CString -> CString -> CInt -> CInt -> IO CInt
 
 -- int do_bwt_alt (const unsigned char *inputArray, unsigned char *outputArray, int *workArray, int sz) ;
-foreign import ccall "encode.h undo_bwt_alt"
+foreign import ccall "decode.h undo_bwt_alt"
   c_undo_bwt_alt :: CString -> CString -> Ptr CInt -> CInt -> CInt -> IO CInt
 
 
@@ -54,6 +58,9 @@ decodeBwtIO bstr = do
       ptr <- mallocBytes len
       -- let ptrLen = (ptr, len)
       rslt <- BSU.unsafeUseAsCString bstr' (\cstr -> c_undo_bwt cstr ptr (fromIntegral len) pidx)
+      if | (rslt == (-1)) -> ioError (inValError "decodeBwtIO")
+         | (rslt <  (-1)) -> ioError (noMemError "decodeBwtIO")
+         | otherwise      -> return ()
       BSU.unsafePackMallocCStringLen (ptr, len)
 
 
@@ -90,10 +97,15 @@ decodeMultiBwtIO bstrs = do
             pidx  = fromIntegral $ makeWord32LE (thisBstr ! 0) (thisBstr ! 1) (thisBstr ! 2) (thisBstr ! 3)
         outPtr <- mallocBytes len
         rslt <- BSU.unsafeUseAsCString bstr' (\cstr -> c_undo_bwt_alt cstr outPtr workPtr (fromIntegral len) pidx)
+        if | (rslt == (-1)) -> ioError (inValError "decodeMultiBwtIO")
+           | (rslt <  (-1)) -> ioError (noMemError "decodeMultiBwtIO")
+           | otherwise      -> return ()
         BSU.unsafePackMallocCStringLen (outPtr, len)
   free workPtr
   return outBstrs
 
+
+-- CErr.eNOMEM
 
 decodeMultiBwt :: [BS.ByteString] -> [BS.ByteString]
 decodeMultiBwt bstrs = unsafePerformIO (decodeMultiBwtIO bstrs)
