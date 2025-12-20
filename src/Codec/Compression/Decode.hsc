@@ -4,8 +4,12 @@
 
 module Codec.Compression.Decode
   ( decodeBwtIO
+  , decodeMultiBwtIO
   , decodeBwt
+  , decodeMultiBwt
   ) where
+
+import Control.Monad
 
 import Data.ByteString qualified as BS
 
@@ -34,6 +38,11 @@ foreign import ccall "decode.h undo_bwt"
   -- c_undo_bwt :: CStringLen -> CStringLen -> CInt -> CInt -> IO CInt
   c_undo_bwt :: CString -> CString -> CInt -> CInt -> IO CInt
 
+-- int do_bwt_alt (const unsigned char *inputArray, unsigned char *outputArray, int *workArray, int sz) ;
+foreign import ccall "encode.h undo_bwt_alt"
+  c_undo_bwt_alt :: CString -> CString -> Ptr CInt -> CInt -> CInt -> IO CInt
+
+
 decodeBwtIO :: BS.ByteString -> IO BS.ByteString
 decodeBwtIO bstr = do
   if (BS.length bstr <= 4)
@@ -59,6 +68,34 @@ fi = fromIntegral
 (!) = BS.index
 
 decodeBwt :: BS.ByteString -> BS.ByteString
-decodeBwt bstr = unsafePerformIO $ decodeBwtIO bstr
+decodeBwt bstr = unsafePerformIO (decodeBwtIO bstr)
 {-# NOINLINE decodeBwt #-}
+
+-- | Decode a number of `BS.ByteString`s with BWT in
+--   a row. Unlike @mapM decodeBwtIO@, this only allocates
+--   one auxilliary array, instead of one for each ByteString.
+decodeMultiBwtIO :: [BS.ByteString] -> IO [BS.ByteString]
+decodeMultiBwtIO [] = return []
+decodeMultiBwtIO [bstr] = (:[]) <$> decodeBwtIO bstr
+decodeMultiBwtIO bstrs = do
+  let lens   = map BS.length bstrs
+      maxLen = (maximum (0:lens))
+  workPtr <- mallocBytes (maxLen * (sizeOf (CInt 5)))
+  outBstrs <- forM bstrs $ \thisBstr -> do
+    if (BS.length thisBstr <= 4)
+      then return (BS.empty)
+      else do
+        let bstr' = BS.drop 4 thisBstr
+            len   = BS.length bstr'
+            pidx  = fromIntegral $ makeWord32LE (thisBstr ! 0) (thisBstr ! 1) (thisBstr ! 2) (thisBstr ! 3)
+        outPtr <- mallocBytes len
+        rslt <- BSU.unsafeUseAsCString bstr' (\cstr -> c_undo_bwt_alt cstr outPtr workPtr (fromIntegral len) pidx)
+        BSU.unsafePackMallocCStringLen (outPtr, len)
+  free workPtr
+  return outBstrs
+
+
+decodeMultiBwt :: [BS.ByteString] -> [BS.ByteString]
+decodeMultiBwt bstrs = unsafePerformIO (decodeMultiBwtIO bstrs)
+{-# NOINLINE decodeMultiBwt #-}
 

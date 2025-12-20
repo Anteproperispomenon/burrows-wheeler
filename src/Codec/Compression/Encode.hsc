@@ -3,8 +3,12 @@
 
 module Codec.Compression.Encode
   ( encodeBwtIO
+  , encodeMultiBwtIO
   , encodeBwt
+  , encodeMultiBwt
   ) where
+
+import Control.Monad
 
 import Data.ByteString qualified as BS
 
@@ -22,11 +26,17 @@ import Foreign.Marshal.Alloc
 
 import System.IO.Unsafe
 
+import Foreign.Storable
+
 #include "encode.h"
 
 foreign import ccall "encode.h do_bwt"
   -- c_do_bwt :: CStringLen -> CStringLen -> CInt -> IO CInt
   c_do_bwt :: CString -> CString -> CInt -> IO CInt
+
+-- int do_bwt_alt (const unsigned char *inputArray, unsigned char *outputArray, int *workArray, int sz) ;
+foreign import ccall "encode.h do_bwt_alt"
+  c_do_bwt_alt :: CString -> CString -> Ptr CInt -> CInt -> IO CInt
 
 encodeBwtIO :: BS.ByteString -> IO BS.ByteString
 encodeBwtIO bstr = do
@@ -39,3 +49,28 @@ encodeBwtIO bstr = do
 encodeBwt :: BS.ByteString -> BS.ByteString
 encodeBwt bstr = unsafePerformIO $ encodeBwtIO bstr
 {-# NOINLINE encodeBwt #-}
+
+-- | Encode a number of `BS.ByteString`s with BWT in
+--   a row. Unlike @mapM encodeBwtIO@, this only allocates
+--   one auxilliary array, instead of one for each ByteString.
+encodeMultiBwtIO :: [BS.ByteString] -> IO [BS.ByteString]
+encodeMultiBwtIO [] = return []
+encodeMultiBwtIO [bstr] = (:[]) <$> encodeBwtIO bstr
+encodeMultiBwtIO bstrs = do
+  let lens   = map BS.length bstrs
+      maxLen = maximum (0:lens)
+  workPtr <- mallocBytes (maxLen * (sizeOf (CInt 5)))
+  outBstrs <- forM bstrs $ \thisBstr -> do
+    if BS.null thisBstr
+      then return BS.empty
+      else do
+        let len = BS.length thisBstr
+        outPtr <- mallocBytes (4 + len)
+        rslt <- BSU.unsafeUseAsCString thisBstr (\cstr -> c_do_bwt_alt cstr outPtr workPtr (fromIntegral len))
+        BSU.unsafePackMallocCStringLen (outPtr, 4 + len)
+  free workPtr
+  return outBstrs
+
+encodeMultiBwt :: [BS.ByteString] -> [BS.ByteString]
+encodeMultiBwt bstrs = unsafePerformIO (encodeMultiBwtIO bstrs)
+{-# NOINLINE encodeMultiBwt #-}

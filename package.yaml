@@ -21,6 +21,7 @@ description:         Please see the README on GitHub at <https://github.com/Ante
 
 default-extensions:
   - ImportQualifiedPost
+  - MultiWayIf
 
 dependencies:
 - base >= 4.14 && < 5
