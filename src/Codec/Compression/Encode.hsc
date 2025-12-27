@@ -5,8 +5,10 @@
 
 module Codec.Compression.Encode
   ( encodeBwtIO
+  , encodeBwtPtrIO
   , encodeMultiBwtIO
   , encodeBwt
+  , encodeBwtPtr
   , encodeMultiBwt
   ) where
 
@@ -40,6 +42,10 @@ foreign import ccall "encode.h do_bwt"
   -- c_do_bwt :: CStringLen -> CStringLen -> CInt -> IO CInt
   c_do_bwt :: CString -> CString -> CInt -> IO CInt
 
+foreign import ccall "encode.h do_bwt_no_hdr"
+  -- c_do_bwt :: CStringLen -> CStringLen -> CInt -> IO CInt
+  c_do_bwt_no_hdr :: CString -> CString -> CInt -> IO CInt
+
 -- int do_bwt_alt (const unsigned char *inputArray, unsigned char *outputArray, int *workArray, int sz) ;
 foreign import ccall "encode.h do_bwt_alt"
   c_do_bwt_alt :: CString -> CString -> Ptr CInt -> CInt -> IO CInt
@@ -47,6 +53,7 @@ foreign import ccall "encode.h do_bwt_alt"
 encodeBwtIO :: BS.ByteString -> IO BS.ByteString
 encodeBwtIO bstr = do
   let len = BS.length bstr
+  -- when (len > 0x7FFFFFFF) (fail ())
   ptr <- mallocBytes (4+len)
   let ptrLen = (ptr, 4+len)
   rslt <- BSU.unsafeUseAsCString bstr (\cstr -> c_do_bwt cstr ptr (CInt $ fromIntegral len))
@@ -55,9 +62,25 @@ encodeBwtIO bstr = do
      | otherwise      -> return ()
   BSU.unsafePackMallocCStringLen ptrLen
 
+encodeBwtPtrIO :: BS.ByteString -> IO (Word32, BS.ByteString)
+encodeBwtPtrIO bstr = do
+  let len = BS.length bstr
+  ptr <- mallocBytes len
+  let ptrLen = (ptr, len)
+  rslt <- BSU.unsafeUseAsCString bstr (\cstr -> c_do_bwt_no_hdr cstr ptr (CInt $ fromIntegral len))
+  if | (rslt == (-1)) -> ioError (inValError "encodeBwtPtrIO")
+     | (rslt <  (-1)) -> ioError (noMemError "encodeBwtPtrIO")
+     | otherwise      -> return ()
+  (fromIntegral rslt, ) <$> BSU.unsafePackMallocCStringLen ptrLen
+
+
 encodeBwt :: BS.ByteString -> BS.ByteString
 encodeBwt bstr = unsafePerformIO $ encodeBwtIO bstr
 {-# NOINLINE encodeBwt #-}
+
+encodeBwtPtr :: BS.ByteString -> (Word32, BS.ByteString)
+encodeBwtPtr bstr = unsafePerformIO $ encodeBwtPtrIO bstr
+{-# NOINLINE encodeBwtPtr #-}
 
 -- | Encode a number of `BS.ByteString`s with BWT in
 --   a row. Unlike @mapM encodeBwtIO@, this only allocates

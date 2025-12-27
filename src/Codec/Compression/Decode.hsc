@@ -6,8 +6,10 @@
 
 module Codec.Compression.Decode
   ( decodeBwtIO
+  , decodeBwtPtrIO
   , decodeMultiBwtIO
   , decodeBwt
+  , decodeBwtPtr
   , decodeMultiBwt
   ) where
 
@@ -54,7 +56,10 @@ decodeBwtIO bstr = do
     else do
       let bstr' = BS.drop 4 bstr
           len   = BS.length bstr'
-          pidx  = fromIntegral $ makeWord32LE (bstr ! 0) (bstr ! 1) (bstr ! 2) (bstr ! 3)
+          pidx0 = makeWord32LE (bstr ! 0) (bstr ! 1) (bstr ! 2) (bstr ! 3)
+          pidx  = fromIntegral pidx0
+      
+      when (fromIntegral pidx /= pidx0) (fail "decodeBwtIO: Data pointer can't safely be converted to a CInt.")
       ptr <- mallocBytes len
       -- let ptrLen = (ptr, len)
       rslt <- BSU.unsafeUseAsCString bstr' (\cstr -> c_undo_bwt cstr ptr (fromIntegral len) pidx)
@@ -63,6 +68,24 @@ decodeBwtIO bstr = do
          | otherwise      -> return ()
       BSU.unsafePackMallocCStringLen (ptr, len)
 
+-- | Instead of storing the ptr to the 
+--   start of data in the `BS.ByteString`,
+--   this instead accept it as a separate
+--   parameter.
+decodeBwtPtrIO :: Word32 -> BS.ByteString -> IO BS.ByteString
+decodeBwtPtrIO wd bstr = do
+  let len   = BS.length bstr
+      pidx  = fromIntegral wd
+  -- Extraordinarily unlikey, but just to be safe.
+  -- to be clear, 2^31 - 1 ~= 2GiB.
+  when (fromIntegral pidx /= wd) (fail "decodeBwtPrtIO: Data pointer can't safely be converted to a CInt.")
+  ptr <- mallocBytes len
+  -- let ptrLen = (ptr, len)
+  rslt <- BSU.unsafeUseAsCString bstr (\cstr -> c_undo_bwt cstr ptr (fromIntegral len) pidx)
+  if | (rslt == (-1)) -> ioError (inValError "decodeBwtIO")
+     | (rslt <  (-1)) -> ioError (noMemError "decodeBwtIO")
+     | otherwise      -> return ()
+  BSU.unsafePackMallocCStringLen (ptr, len)
 
 makeWord32LE :: Word8 -> Word8 -> Word8 -> Word8 -> Word32
 makeWord32LE (fi -> b1) (fi -> b2) (fi -> b3) (fi -> b4)
@@ -77,6 +100,10 @@ fi = fromIntegral
 decodeBwt :: BS.ByteString -> BS.ByteString
 decodeBwt bstr = unsafePerformIO (decodeBwtIO bstr)
 {-# NOINLINE decodeBwt #-}
+
+decodeBwtPtr :: Word32 -> BS.ByteString -> BS.ByteString
+decodeBwtPtr wd bstr = unsafePerformIO (decodeBwtPtrIO wd bstr)
+{-# NOINLINE decodeBwtPtr #-}
 
 -- | Decode a number of `BS.ByteString`s with BWT in
 --   a row. Unlike @mapM decodeBwtIO@, this only allocates
@@ -104,8 +131,6 @@ decodeMultiBwtIO bstrs = do
   free workPtr
   return outBstrs
 
-
--- CErr.eNOMEM
 
 decodeMultiBwt :: [BS.ByteString] -> [BS.ByteString]
 decodeMultiBwt bstrs = unsafePerformIO (decodeMultiBwtIO bstrs)
